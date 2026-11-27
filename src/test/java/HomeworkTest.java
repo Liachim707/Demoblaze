@@ -1,80 +1,99 @@
 import com.codeborne.selenide.Selenide;
 import org.junit.jupiter.api.Test;
 
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
 import static com.codeborne.selenide.Condition.*;
 import static com.codeborne.selenide.Selectors.byText;
 import static com.codeborne.selenide.Selenide.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 public class HomeworkTest {
 
+    private static int extractPrice(String priceText) {
+        String digits = priceText.replaceAll("[^0-9]", "");
+        return Integer.parseInt(digits);
+    }
+
     @Test
     void testAddToCartAndPlaceOrder() {
-        // 1. Перейти на страницу: https://demoblaze.com
+        // 1. Открыть сайт и авторизоваться.
         open("https://demoblaze.com");
 
-        // Логин: test; пароль: test
-        $("#loginUsername").setValue("test");
-        $("#loginPassword").setValue("test");
-        $("#loginModal .btn-primary").click();
+        $("#login2").click();
+        $("#logInModal").shouldBe(visible);
+        $("#loginusername").setValue("test");
+        $("#loginpassword").setValue("test");
+        $("#logInModal button.btn-primary").click();
+        $("#nameofuser").shouldHave(text("Welcome test"));
 
-        // 2. Добавить в корзину три товара: Nokia lumia 1520, Iphone 6 32gb и Sony vaio i7
+        // 2. Добавить в корзину три товара и сохранить их цены со страницы товара.
         String[] products = {"Nokia lumia 1520", "Iphone 6 32gb", "Sony vaio i7"};
-        double[] prices = new double[3];
+        int expectedTotal = 0;
 
-        for (int i = 0; i < products.length; i++) {
-            // Кликнуть на карточку товара
-            $(byText(products[i])).click();
+        for (String product : products) {
+            $(byText(product)).click();
 
-            // Кликнуть по кнопке Add to Cart
-            $(".btn-success").click();
+            String priceText = $("#tbodyid .price-container").shouldBe(visible).text();
+            int productPrice = extractPrice(priceText);
+            expectedTotal += productPrice;
 
-            // Нажать OK в диалоговом окне
-            Selenide.confirm();
+            $("a.btn.btn-success").click();
+            // DemoBlaze показывает обычный JavaScript alert после добавления товара.
+            switchTo().alert().accept();
 
-            // Вернуться на страницу Home
-            $(byText("Home")).click();
-
-            // Сохранить цену товара для сверки
-            prices[i] = Double.parseDouble($(".price").text().replace("$", ""));
+            $("a.nav-link[href='index.html']").click();
+            $(byText(product)).shouldBe(visible);
         }
 
-        // 3. Перейти в корзину Cart
+        // 3. Открыть корзину и проверить наличие выбранных товаров.
         $("#cartur").click();
+        $("#tbodyid tr").shouldHave(size(products.length));
 
-        // 6. Проверить, что итоговая цена Total является суммой цен трех выбранных товаров
-        double expectedTotal = prices[0] + prices[1] + prices[2];
-        String totalText = $(".total").text();
-        double actualTotal = Double.parseDouble(totalText.replace("$", ""));
+        for (String product : products) {
+            $("#tbodyid").shouldHave(text(product));
+        }
 
-        assert Math.abs(actualTotal - expectedTotal) < 0.01 :
-                "Total price mismatch. Expected: " + expectedTotal + ", Actual: " + actualTotal;
+        // 4. Сверить сумму цен в корзине с суммой, рассчитанной на страницах товаров.
+        int cartTotal = extractPrice($("#totalp").shouldBe(visible).text());
+        assertEquals(expectedTotal, cartTotal, "Итоговая сумма корзины рассчитана неверно");
 
-        // 7. Сделать заказ по клику на Place Order
-        $(".btn-success").click();
+        // 5. Оформить заказ.
+        $("button[data-target='#orderModal']").click();
+        $("#orderModal").shouldBe(visible);
 
-        // 8. Заполнить все поля формы заказа
         $("#name").setValue("Test User");
-        $("#country").setValue("TestCountry");
-        $("#city").setValue("TestCity");
+        $("#country").setValue("Test Country");
+        $("#city").setValue("Test City");
         $("#card").setValue("1234567890123456");
         $("#month").setValue("12");
-        $("#year").setValue("2025");
+        $("#year").setValue("2026");
 
-        // 9. Нажать Purchase
-        $(".btn-primary").click();
+        $("#orderModal button.btn-primary").click();
 
-        // 10. Проверить, что сумма Amount верна
-        String amountText = $(".amount").text();
-        double amount = Double.parseDouble(amountText.replace("$", ""));
-        assert Math.abs(amount - expectedTotal) < 0.01 :
-                "Amount mismatch. Expected: " + expectedTotal + ", Actual: " + amount;
+        // 6. Проверить сумму и получить ID из окна подтверждения заказа.
+        $(".sweet-alert").shouldBe(visible);
+        String confirmationText = $(".sweet-alert").getText();
 
-        // 11. Получить текст с Id заказа и вывести в консоль
-        String orderIdText = $(".order-label").text();
-        System.out.println("Order ID: " + orderIdText);
+        Matcher amountMatcher = Pattern.compile("Amount:\\s*(\\d+)").matcher(confirmationText);
+        if (!amountMatcher.find()) {
+            throw new AssertionError("Не удалось найти сумму заказа в подтверждении: " + confirmationText);
+        }
+        int orderAmount = Integer.parseInt(amountMatcher.group(1));
+        assertEquals(expectedTotal, orderAmount, "Сумма заказа не совпадает с суммой корзины");
 
-        // 12. Кликнуть OK и проверить, что окно пропало
-        Selenide.confirm();
-        $(".purchase-container").should(disappear);
+        String orderId = confirmationText.lines()
+                .map(String::trim)
+                .filter(line -> line.startsWith("Id:"))
+                .map(line -> line.substring("Id:".length()).trim())
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("ID заказа не найден: " + confirmationText));
+
+        System.out.println("ID заказа: " + orderId);
+
+        // 7. Закрыть подтверждение и убедиться, что оно исчезло.
+        $(".sweet-alert button.confirm").click();
+        $(".sweet-alert").should(disappear);
     }
 }
